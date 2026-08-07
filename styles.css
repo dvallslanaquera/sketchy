@@ -1,0 +1,328 @@
+@font-face {
+  font-family: "Excalifont";
+  src: url("vendor/fonts/excalifont.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Caveat";
+  src: url("vendor/fonts/caveat.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: #000;
+  color: #e6e6e6;
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+}
+
+#sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #181818;
+  border-right: 1px solid #333;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #333;
+}
+
+.logo {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.sidebar-btn {
+  background: #2a2a2a;
+  color: #e6e6e6;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidebar-btn:hover:not(:disabled) {
+  background: #333;
+}
+
+.sidebar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.canvas-list {
+  list-style: none;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.canvas-item {
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #b3b3b3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.canvas-item:hover {
+  background: #222;
+  color: #e6e6e6;
+}
+
+.canvas-item.is-active {
+  background: #2c2c2c;
+  color: #fff;
+}
+
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: #181818;
+  border-bottom: 1px solid #333;
+}
+
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#tools {
+  flex: 1;
+}
+
+.bg-btn,
+.tool-btn {
+  background: #2a2a2a;
+  color: #e6e6e6;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bg-btn:hover:not(:disabled),
+.tool-btn:hover {
+  background: #333;
+}
+
+.bg-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.bg-btn.is-active,
+.tool-btn.is-active {
+  background: #3a3a3a;
+  border-color: #666;
+  color: #fff;
+}
+
+#content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+#canvas-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+#canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  /* Recomputed by updateViewBox on every zoom change so the hit margin and
+     the preview stroke stay a constant size on screen. */
+  --hit-w: 10;
+  --px: 1;
+}
+
+#canvas[data-bg="black"] {
+  background: #000;
+}
+
+#canvas[data-bg="charcoal"] {
+  background: #232323;
+}
+
+#canvas[data-tool="rect"],
+#canvas[data-tool="ellipse"],
+#canvas[data-tool="diamond"],
+#canvas[data-tool="arrow"],
+#canvas[data-tool="text"] {
+  cursor: crosshair;
+}
+
+/* Companion hit paths. Same d as the visible rough path, fat and invisible,
+   so clicking near a wobbly 1px stroke still lands. */
+.hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: var(--hit-w);
+  pointer-events: stroke;
+}
+
+.hit-fill {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
+.preview-shape {
+  fill: none;
+  stroke-width: var(--px);
+  pointer-events: none;
+}
+
+/* Selection chrome. The box is inert so it does not swallow clicks on what it
+   surrounds; grips opt back in. */
+.sel-box {
+  fill: none;
+  stroke: #6ea8fe;
+  stroke-width: var(--px);
+  stroke-dasharray: calc(4 * var(--px)) calc(3 * var(--px));
+  pointer-events: none;
+}
+
+.grip {
+  fill: #101010;
+  stroke: #6ea8fe;
+  stroke-width: var(--px);
+  pointer-events: all;
+}
+
+.grip[data-grip="nw"], .grip[data-grip="se"] { cursor: nwse-resize; }
+.grip[data-grip="ne"], .grip[data-grip="sw"] { cursor: nesw-resize; }
+.grip[data-grip="n"], .grip[data-grip="s"] { cursor: ns-resize; }
+.grip[data-grip="e"], .grip[data-grip="w"] { cursor: ew-resize; }
+
+.marquee {
+  fill: #6ea8fe;
+  fill-opacity: 0.1;
+  stroke: #6ea8fe;
+  stroke-width: var(--px);
+  pointer-events: none;
+}
+
+#text-editor {
+  position: absolute;
+  background: transparent;
+  border: 1px dashed #555;
+  border-radius: 2px;
+  color: #e6e6e6;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  padding: 2px 4px;
+}
+
+#panel {
+  width: 200px;
+  flex-shrink: 0;
+  background: #181818;
+  border-left: 1px solid #333;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-stack {
+  display: block;
+}
+
+.panel-label {
+  color: #b3b3b3;
+}
+
+.panel-label b {
+  color: #e6e6e6;
+  font-weight: 500;
+}
+
+.panel-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b3b3b3;
+  cursor: pointer;
+}
+
+#panel input[type="color"] {
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2a2a2a;
+  cursor: pointer;
+}
+
+#panel input[type="color"]:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#panel input[type="range"] {
+  width: 100%;
+  margin-top: 8px;
+  accent-color: #6ea8fe;
+}
+
+#panel-count {
+  color: #777;
+  border-top: 1px solid #2a2a2a;
+  padding-top: 10px;
+  margin-bottom: 0;
+}
+
+.hidden {
+  display: none !important;
+}

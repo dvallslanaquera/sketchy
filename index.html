@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sketchy</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <span class="logo">Sketchy</span>
+        <button id="new-canvas" class="sidebar-btn" title="New canvas" disabled>New</button>
+      </div>
+      <ul id="canvas-list" class="canvas-list"></ul>
+    </aside>
+
+    <main id="main">
+      <div id="toolbar" class="toolbar">
+        <div class="tool-group" id="tools"></div>
+        <div class="tool-group" id="bg-toggle">
+          <button id="bg-black" class="bg-btn is-active" title="Pure black background">Black</button>
+          <button id="bg-charcoal" class="bg-btn" title="Charcoal grey background">Charcoal</button>
+        </div>
+        <div class="tool-group" id="history-group">
+          <button id="undo-btn" class="bg-btn" title="Undo (Ctrl+Z)" disabled>Undo</button>
+          <button id="redo-btn" class="bg-btn" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+        </div>
+      </div>
+
+      <div id="content">
+        <div id="canvas-wrap">
+          <svg id="canvas" xmlns="http://www.w3.org/2000/svg" data-bg="black" data-tool="select">
+            <g id="scene"></g>
+            <g id="preview"></g>
+            <g id="marquee"></g>
+            <g id="chrome"></g>
+          </svg>
+          <textarea id="text-editor" class="hidden" spellcheck="false"></textarea>
+        </div>
+        <aside id="panel" class="hidden">
+          <div class="panel-row">
+            <span class="panel-label">Stroke</span>
+            <input type="color" id="prop-stroke" value="#e6e6e6">
+          </div>
+          <div class="panel-row">
+            <span class="panel-label">Fill</span>
+            <input type="color" id="prop-fill" value="#3b6ea5">
+          </div>
+          <div class="panel-row">
+            <label class="panel-check"><input type="checkbox" id="prop-nofill" checked> No fill</label>
+          </div>
+          <div class="panel-row panel-stack">
+            <span class="panel-label">Opacity <b id="prop-opacity-val">100%</b></span>
+            <input type="range" id="prop-opacity" min="0" max="1" step="0.01" value="1">
+          </div>
+          <div class="panel-row" id="panel-count"></div>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <script src="vendor/rough.js"></script>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
