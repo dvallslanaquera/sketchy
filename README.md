@@ -11,7 +11,7 @@ A hand-drawn sketching tool for the browser, built to keep the time between a mo
 - **Pan and zoom:** hold space to drag the canvas, scroll to pan, pinch or `Ctrl`-scroll to zoom on the cursor.
 - **Undo and redo:** a 10-step history, one entry per completed action.
 - **Auto-save:** every change writes to IndexedDB; reload and your work is still there.
-- **Multiple canvases:** a sidebar to create and switch between drawings.
+- **Multiple canvases:** a sidebar to create, rename, delete, and switch between drawings, each with a live thumbnail.
 - **Background tones:** pure black or charcoal grey.
 - **No build step:** static files, no node_modules, no transpile, runs offline.
 

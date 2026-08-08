@@ -224,7 +224,9 @@ On each new action: `past.push(preSnap); if (past.length > 10) past.shift(); fut
 - **Redo.** Ctrl+Shift+Z is the primary binding. Ctrl+Y is an alias. Ctrl+R is bound too, as requested, with `preventDefault()` to block the browser refresh. Ctrl+R is preventable in current Chrome and Firefox, but one miss reloads the page, so it is the third binding rather than the first. (`e.returnValue = false` is the `beforeunload` API and does nothing on a keydown, so it is not used.)
 - Undo and redo also write to IDB, so undoing then closing persists the undone state.
 
-Canvas deletion is not part of the element history. Deleting a canvas sets `deletedAt` on the record, hides it from the sidebar, and purges on the next boot, which gives a session-long grace period without a confirm dialog on the hot path.
+Canvas deletion is not part of the element history. Deleting a canvas sets `deletedAt` on the record, hides it from the sidebar, and purges on the next boot, which gives a session-long grace period without a confirm dialog on the hot path. Deleting the active canvas moves to the first remaining one, or creates a fresh Untitled if that was the last.
+
+Renaming happens in place. Double-clicking the name swaps in an `<input>`; Enter and blur commit, Esc reverts. The global keydown gate already ignores text inputs, so the rename field keeps its own keystrokes without any extra wiring. A rename or a thumbnail arriving would otherwise rebuild the list and throw away an open input, so a finished thumbnail updates that one `<img>` by `data-cid` rather than repainting the sidebar.
 
 ## IndexedDB schema
 
@@ -232,12 +234,14 @@ Canvas deletion is not part of the element history. Deleting a canvas sets `dele
 
 - **canvases** (keyPath `id`): `{ id, name, createdAt, updatedAt, deletedAt, elements, view, bg }`.
 - **blobs** (keyPath `id`): `{ id, blob, mime }`. Image bytes live separately so canvas records stay small and blobs dedupe.
-- **thumbs** (keyPath `canvasId`): `{ canvasId, dataUrl, elementCount }`. Split out so the hot save path never serializes a thumbnail string alongside the elements.
+- **thumbs** (keyPath `id`, holding the canvas id): `{ id, dataUrl, elementCount, updatedAt }`. Split out so the hot save path never serializes a thumbnail string alongside the elements.
 - **meta** (keyPath `key`): `activeCanvas` and `settings`.
 
 Boot sequence: open the DB, purge soft-deleted canvases, create one "Untitled" canvas if empty, load the active canvas, render.
 
 **Save race.** The debounced write captures `canvasId` in its closure and drops the write if the active canvas has changed since it was scheduled. Without that guard, switching canvases with a save in flight writes the old element list into the new canvas record.
+
+The same check runs again inside the idle callback, not only at schedule time. An idle write can sit in the queue for up to its 1500 ms timeout while a canvas switch flushes fresh data synchronously, and the older doc would then land on top of the newer one. Re-reading `state.activeId` at write time drops it instead. That second check is also what stops a pending write from resurrecting a canvas deleted while it waited, since a delete clears the active id before its first await and `buildDoc` has no `deletedAt` field to carry.
 
 ## Sidebar thumbnails
 
@@ -248,7 +252,15 @@ Two constraints follow from the `<img>` step, because an SVG loaded into an `<im
 - `<foreignObject>` HTML content does not render at all. This is the main reason committed text is `<text>`/`<tspan>` rather than `<foreignObject>`; otherwise every thumbnail would silently drop its text.
 - Blob URLs do not resolve. Image elements are inlined as `data:` URIs during thumbnail serialization, read once from the blob store and cached.
 
-Generation runs in `requestIdleCallback`, and only for canvases that are not currently active. Switching away from a canvas queues its thumbnail. `elementCount` on the record lets us skip regeneration when nothing changed.
+There is a third, and it is the one that bites first: no stylesheet loads either. Everything the tile needs has to be a presentation attribute on the node. rough.js already writes `d`, `stroke`, `stroke-width` and `fill` as attributes, and `applyStyle` writes stroke, fill and opacity the same way, so the visible geometry is self-describing. The companion hit paths are not, since `.hit` lives in `styles.css`, and an unstyled `<path>` defaults to `fill: black`. A thumbnail that included them would paint a solid black blob over the drawing. `buildNode` takes a `withHits` flag for exactly this, and the thumbnail passes `false`.
+
+The same reasoning drives the `xmlns` handling. The serializer emits the namespace itself for a namespaced root, and setting the attribute by hand risks a duplicate declaration, which is invalid XML and renders as nothing. The serialized string is checked for `xmlns=` and patched only if it is genuinely absent.
+
+The tile paints its own background rect from the canvas `bg`, so light strokes stay readable and the tone matches what the canvas looked like. Fit scale is capped at 1. Without the cap, a single small rectangle is blown up to fill the tile and its 1.6-unit stroke renders as a slab across the thumbnail.
+
+Generation runs in `requestIdleCallback`, and only for canvases that are not currently active. Switching away from a canvas queues its thumbnail, and the queue read lands after the switch's synchronous flush because IndexedDB runs overlapping transactions in creation order.
+
+The skip check compares both `elementCount` and `updatedAt`. `elementCount` alone was the original plan, but it misses a restyle: changing the color of three shapes changes no count, and the thumbnail would stay wrong until an element was added or removed. `updatedAt` moves on every save, so the pair is a cheap and honest dirty check.
 
 ## Text
 
