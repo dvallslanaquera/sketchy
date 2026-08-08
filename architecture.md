@@ -81,6 +81,8 @@ C:\dev\sketchy\
     tools.js                pointer state machine, drag handlers, marquee
     view.js                 pan, zoom, zoom-to-fit
     text.js                 <text>/<tspan> layout, <textarea> editor overlay
+    edit.js                 clipboard, duplicate, delete, select all, z-order
+    export.js               SVG and PNG download
     history.js              undo/redo stack
     db.js                   IndexedDB wrapper
     thumbs.js               offscreen thumbnail rendering
@@ -91,7 +93,9 @@ C:\dev\sketchy\
   README.md                 how to run, shortcuts
 ```
 
-Eight source files rather than one, because ES modules make the split free and `app.js` as a single file would run past 2000 lines. Each module owns one job and exports a handful of functions.
+Ten source files rather than one, because ES modules make the split free and `app.js` as a single file would run past 2000 lines. Each module owns one job and exports a handful of functions.
+
+`edit.js` holds the commands that mutate `elements` without a pointer: copy, cut, paste, duplicate, delete, select all, and the two z-order moves. They share a shape, each one pushes exactly one snapshot, and none of them belong to a tool, so keeping them out of `tools.js` keeps that file about the pointer.
 
 `view.js` is separate from `render.js` because the viewport is state that three callers mutate (the wheel handler, the hand drag, and the two zoom shortcuts) while `render.js` only reads it to write the `viewBox`. It is also the one piece of state that is deliberately outside history.
 
@@ -110,7 +114,7 @@ state = {
   bg: 'black' | 'charcoal',
   tool: 'select' | 'arrow' | 'rect' | 'ellipse' | 'diamond' | 'text' | 'pan',
   drag: null | { kind, startWorld, lastWorld, grip, ids },
-  clipboard: Element[],
+  clipboard: Element[],         // survives a canvas switch, so copy here and paste there works
 }
 ```
 
@@ -206,7 +210,7 @@ A zoom changes `scale`, and grip size, chrome padding, the hit margin and the pr
 - **Move.** Dragging the body writes `transform` on the selected `<g>` nodes for the duration of the drag and bakes into `x, y` on pointerup. No geometry rebuild.
 - **Resize.** Dragging a grip scales the group. Shapes scale `w, h`, text scales `fontSize`, images scale `w, h`. Live preview uses the cheap non-rough path.
 - **Bulk edit.** The properties panel writes stroke color, fill color, and opacity to every selected id in one mutation, which produces one history snapshot.
-- **Z-order.** Ctrl+Shift+] brings to front, Ctrl+Shift+[ sends to back, both splice within `elements`.
+- **Z-order.** Ctrl+Shift+] brings to front, Ctrl+Shift+[ sends to back, both splice within `elements`. A multi-selection keeps its relative order, so sending a group back does not shuffle it. Neither one bumps a version: the renderer already compares `scene.childNodes[i]` against the cached node and calls `insertBefore` when they disagree, so a reorder is a DOM move with no geometry rebuild. An order that is already correct returns without pushing a snapshot, rather than burning a history slot on nothing.
 
 The opacity slider splits its two events. `input` writes the attribute directly for a live preview with no snapshot. `change` commits and pushes one snapshot. Without the split, one slider drag pushes 40 snapshots and empties the 10-slot history in a single gesture.
 
@@ -276,17 +280,39 @@ Ten faces: Excalifont, Caveat, Segoe UI, Arial, Comic Sans MS, Georgia, Courier 
 
 ## Clipboard
 
-`Ctrl+V` has two possible sources and a defined precedence: if the system clipboard carries an `image/*` item, paste the image; otherwise if it carries text beginning with the magic prefix `sketchy:v1:`, parse the JSON payload and paste those elements; otherwise if the internal `state.clipboard` is non-empty, paste from it.
+`Ctrl+V` has three possible sources and a defined precedence: if the system clipboard carries an `image/*` item, paste the image; otherwise if it carries text beginning with the magic prefix `sketchy:v1:`, parse the JSON payload and paste those elements; otherwise if the internal `state.clipboard` is non-empty, paste from it. Foreign text on the clipboard does not stop the chain, it just fails the prefix test and the internal buffer wins.
 
-`Ctrl+C` writes both. Elements go into `state.clipboard` and, as `sketchy:v1:` plus JSON, onto the system clipboard, so copy and paste works across browser tabs.
+The image branch is phase 7 work, but the test for it is already in place, so a pasted screenshot stops at the top of the chain instead of falling through and pasting whatever shapes were copied an hour ago.
 
-Image paste finds the first `image/*` item, calls `getAsFile()`, stores the blob in the `blobs` store, and creates an image element at the world point under the cursor (or the canvas center) sized from the natural dimensions. The new element is selected.
+Copy and paste take different routes into the browser, which looks inconsistent until you try the symmetric versions.
 
-Pasted elements are cloned with fresh ids and offset 10 px. Images reuse the `blobId`, so pasting an image ten times stores one copy of the bytes.
+Paste rides the `paste` event. It hands over the clipboard synchronously in `e.clipboardData`, with both the text and any files, and it asks for no permission. `navigator.clipboard.read()` does the same job and prompts in Chrome, so `Ctrl+V` has no keydown binding at all.
+
+Copy is bound on keydown and writes through `navigator.clipboard.writeText`. The symmetric choice would be the `copy` event, and it does not work here. Firefox does not fire `copy` when nothing is selected and no editable is focused, and the SVG is `user-select: none`, so there never is anything selected. `writeText` needs a user gesture and a secure context, both of which a keydown on localhost gives. A rejected write is swallowed, because `state.clipboard` already holds the same elements and the in-tab path still works.
+
+`Ctrl+C` writes both places. Elements go into `state.clipboard` and, as `sketchy:v1:` plus JSON, onto the system clipboard, so copy and paste works across browser tabs. The payload carries elements only, never blob bytes. Blobs live in the origin's IndexedDB, so a `blobId` copied in one tab already resolves in another.
+
+An incoming payload is rebuilt field by field rather than trusted as handed over. It arrives as text a user could have edited, an older build could have written, or a truncated copy could have mangled, and an unexpected key reaching `state.elements` goes straight into IndexedDB and outlives the session. Anything that fails the type check is dropped.
+
+Pasted elements are cloned with fresh ids and offset 10 world units. The seed comes along unchanged, because a copy that reshuffled its wobble would not read as a copy. Images reuse the `blobId`, so pasting an image ten times stores one copy of the bytes. A repeat paste offsets again, 10 then 20 then 30, so holding `Ctrl+V` staircases instead of stacking every copy on the same pixel. The counter resets on the next `Ctrl+C`.
+
+Clones append to the end of `elements`, which puts them on top, and they keep their relative order among themselves. `Ctrl+D` is the same code path with a fixed 10 unit offset and no clipboard write.
+
+`state.clipboard` is deliberately outside the per-canvas state, so copying on one drawing and pasting into another works.
 
 ## Export
 
-`Ctrl+Shift+E` exports the active canvas. SVG export serializes the scene with image blobs inlined as data URIs, the same path the thumbnail uses at full size. PNG export draws that SVG into an `OffscreenCanvas` at 2x and calls `toBlob`. Both download through an `<a download>` and an object URL.
+`Ctrl+Shift+E` exports the active canvas and writes two files, an SVG and a PNG. One shortcut for both, because there is one export command in the spec and the verification pass wants both artifacts. Chrome asks once for permission to download multiple files.
+
+Geometry comes from `buildNode`, the same call the on-screen renderer makes, so an export cannot drift from what is on the canvas. It passes `withHits: false` for the reason the thumbnails do: `.hit` is styled from `styles.css`, an exported file loads no stylesheet, and an unstyled `<path>` defaults to `fill: black`, which would paint a slab over the drawing.
+
+The scene is cropped to the union bbox with 24 units of padding, and the tone from `bg` is painted as a background rect. `width` and `height` go on the root as well as the `viewBox`, because Firefox renders a root without them at zero size inside an `<img>`, which is exactly what the PNG path does next.
+
+`BG`, `inlineBlobs` and `serializeSvg` come from `thumbs.js` rather than being written twice. An exported file faces the same constraints as a tile, no stylesheet and no `blob:` URLs, and the PNG conversion goes through an `<img>` as well.
+
+PNG export loads the serialized SVG as a data URL into an `Image`, draws it into an `OffscreenCanvas` at 2x, and calls `convertToBlob`. There is a `<canvas>` and `toBlob` fallback for anything without `OffscreenCanvas`. Nothing in the markup references an external URL, so the canvas stays untainted.
+
+Both files download through an `<a download>` and an object URL. The URL is revoked on a timer rather than on the next line, because the download reads it after `click()` returns. The filename comes from the canvas name with anything outside word characters, spaces and hyphens stripped, since a slash or a colon breaks the download on Windows. An export with no elements does nothing.
 
 ## Background tones
 
@@ -312,6 +338,12 @@ Shortcuts, all gated to ignore when an `input`, `textarea`, or `contenteditable`
 - Ctrl+Shift+]: bring to front. Ctrl+Shift+[: send to back.
 - Shift+1: zoom to fit. Ctrl+0: reset zoom.
 - Ctrl+Shift+E: export.
+
+Three of these read `e.code` instead of `e.key`, for the same reason Shift+1 does. Ctrl+Shift+] is `}` on a US layout and missing outright on layouts where the bracket needs AltGr, so the binding is `BracketRight`. The tool digits match `Digit1` through `Digit6` and are checked after Shift+1, so shift decides between zoom-to-fit and the Select tool.
+
+Esc has an order: an in-flight drag aborts first, and only with nothing dragging does it clear the selection. Aborting is the same `abortDrag` the mid-drag Ctrl+Z and `pointercancel` paths call, so a half-drawn rectangle, a live marquee, and a move in progress all drop their transient state without reaching history.
+
+Pressing a digit while Space is held writes to `heldTool` rather than calling `setTool`, because the keyup that ends hand mode restores `heldTool` and would otherwise throw the choice away. The new tool lights up when Space comes back up.
 
 ## Edge cases
 
