@@ -93,8 +93,10 @@ export function getBlob(blobId) {
   return asPromise(store("blobs", "readonly").get(blobId));
 }
 
-export function putThumb(cid, dataUrl) {
-  return asPromise(store("thumbs", "readwrite").put({ id: cid, dataUrl }));
+// { id, dataUrl, elementCount, updatedAt }; split from the canvas record so the hot save path
+// never serializes a thumbnail string alongside the elements
+export function putThumb(rec) {
+  return asPromise(store("thumbs", "readwrite").put(rec));
 }
 
 export function getThumb(cid) {

@@ -14,6 +14,7 @@ import {
 } from "./render.js";
 import { initTools, setTool, abortDrag } from "./tools.js";
 import { zoomToFit, resetZoom, syncZoomLabel } from "./view.js";
+import { thumbUrl, queueThumb, dropThumb, primeThumbs, setThumbListener } from "./thumbs.js";
 import { snapshot, pushSnapshot, undo, redo, canUndo, canRedo, resetHistory } from "./history.js";
 
 // history lives in history.js so a snapshot can't capture the stack
@@ -329,8 +330,13 @@ export function flushSave({ immediate = false } = {}) {
   // stale: scheduled for a canvas that is no longer active; switchCanvas already flushed it
   if (state.activeId !== cid) return;
   const doc = buildDoc(cid);
-  const write = () =>
+  // re-checked at write time, not just at schedule time. An idle write can sit in the queue while
+  // a canvas switch flushes fresh data synchronously, and this older doc would land on top of it.
+  // The same check keeps a pending write from resurrecting a canvas that was deleted meanwhile.
+  const write = () => {
+    if (state.activeId !== cid) return;
     putCanvas(doc).catch((e) => console.error("sketchy: save failed", e));
+  };
   if (immediate || typeof requestIdleCallback !== "function") write();
   else requestIdleCallback(write, { timeout: 1500 });
 }
@@ -348,8 +354,11 @@ window.addEventListener("pagehide", () => flushSave({ immediate: true }));
 export async function switchCanvas(cid) {
   if (cid === state.activeId) return;
   // Flush the outgoing canvas while its elements are still in state.
+  const outgoing = state.activeId;
   flushSave({ immediate: true });
   state.activeId = cid;
+  // after activeId moves, or queueThumb would refuse it as the active canvas
+  queueThumb(outgoing);
   const doc = await getCanvas(cid);
   state.elements = doc && doc.elements ? doc.elements : [];
   const v = (doc && doc.view) || {};
@@ -371,7 +380,7 @@ export async function switchCanvas(cid) {
   renderElements();
   selectionChanged();
   await setMeta("activeCanvas", cid);
-  renderSidebar();
+  syncActiveItem();
 }
 
 export async function newCanvas() {
@@ -390,18 +399,145 @@ export async function newCanvas() {
   await putCanvas(doc);
   state.canvases.push({ id: cid, name: "Untitled", createdAt: now, updatedAt: now });
   await switchCanvas(cid);
+  renderSidebar(); // switchCanvas only moves the active class, and this row is new
 }
 
+// id of the canvas whose name is currently an <input>, or null
+let renaming = null;
+
+function buildItem(c) {
+  const li = document.createElement("li");
+  li.className = "canvas-item" + (c.id === state.activeId ? " is-active" : "");
+  li.dataset.cid = c.id;
+
+  const img = document.createElement("img");
+  img.className = "canvas-thumb";
+  img.alt = "";
+  img.draggable = false;
+  const url = thumbUrl(c.id);
+  if (url) img.src = url;
+  li.appendChild(img);
+
+  const name = document.createElement("span");
+  name.className = "canvas-name";
+  name.textContent = c.name;
+  name.title = c.name + " (double-click to rename)";
+  li.appendChild(name);
+
+  const del = document.createElement("button");
+  del.className = "canvas-del";
+  del.type = "button";
+  del.title = "Delete canvas";
+  del.textContent = "x";
+  del.addEventListener("click", (e) => {
+    e.stopPropagation(); // the row click switches canvases
+    deleteCanvasItem(c.id);
+  });
+  li.appendChild(del);
+
+  li.addEventListener("click", () => {
+    if (renaming) return;
+    switchCanvas(c.id);
+  });
+  name.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    startRename(li, c);
+  });
+  return li;
+}
+
+// full rebuild, so only for membership changes: boot, new, delete, rename
 function renderSidebar() {
   canvasList.innerHTML = "";
-  for (const c of state.canvases) {
-    const li = document.createElement("li");
-    li.className = "canvas-item" + (c.id === state.activeId ? " is-active" : "");
-    li.textContent = c.name;
-    li.title = c.name;
-    li.addEventListener("click", () => switchCanvas(c.id));
-    canvasList.appendChild(li);
+  for (const c of state.canvases) canvasList.appendChild(buildItem(c));
+}
+
+// a switch changes which row is lit and nothing else. Rebuilding here would tear out a rename
+// input, because double-clicking a row fires its click and switches canvases first.
+function syncActiveItem() {
+  for (const li of canvasList.children) {
+    li.classList.toggle("is-active", li.dataset.cid === state.activeId);
   }
+}
+
+// targeted, because a full rebuild while a rename input is open would throw the input away
+function paintThumb(cid, dataUrl) {
+  const img = canvasList.querySelector(`[data-cid="${cid}"] .canvas-thumb`);
+  if (img) img.src = dataUrl;
+}
+
+function startRename(li, c) {
+  if (renaming) return;
+  const name = li.querySelector(".canvas-name");
+  const input = document.createElement("input");
+  input.className = "canvas-rename";
+  input.type = "text";
+  input.value = c.name;
+  renaming = c.id;
+
+  let settled = false;
+  const finish = async (keep) => {
+    if (settled) return;
+    settled = true;
+    renaming = null;
+    const next = input.value.trim();
+    input.replaceWith(name);
+    if (!keep || !next || next === c.name) return;
+    await renameCanvas(c.id, next);
+  };
+
+  input.addEventListener("keydown", (e) => {
+    // the global handler is gated on isTyping(), so only the two commit keys need handling here
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
+
+  name.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+async function renameCanvas(cid, name) {
+  const meta = state.canvases.find((x) => x.id === cid);
+  if (meta) meta.name = name;
+  const doc = await getCanvas(cid);
+  if (doc) {
+    doc.name = name;
+    doc.updatedAt = Date.now();
+    await putCanvas(doc);
+  }
+  renderSidebar();
+}
+
+// soft delete: hide it now, hard-delete on the next boot. A session-long grace period costs
+// nothing and buys us no confirm dialog on the hot path.
+async function deleteCanvasItem(cid) {
+  const wasActive = cid === state.activeId;
+  // clear the active id before the first await. A debounced save landing mid-delete would write
+  // a record with no deletedAt and resurrect the canvas.
+  if (wasActive) state.activeId = null;
+  state.canvases = state.canvases.filter((x) => x.id !== cid);
+  dropThumb(cid);
+  renderSidebar();
+
+  const doc = await getCanvas(cid);
+  if (doc) {
+    doc.deletedAt = Date.now();
+    await putCanvas(doc);
+  }
+  if (!wasActive) return;
+
+  // the active one just went away, so land somewhere real
+  if (state.canvases.length) await switchCanvas(state.canvases[0].id);
+  else await newCanvas();
 }
 
 async function boot() {
@@ -457,8 +593,13 @@ async function boot() {
   selectionChanged();
 
   newBtn.disabled = false;
-  renderSidebar();
   syncHistoryButtons();
+
+  setThumbListener(paintThumb);
+  renderSidebar();
+  // stored tiles paint as they load, then the queue fills in whatever is missing or stale
+  await primeThumbs(state.canvases.map((c) => c.id));
+  for (const c of state.canvases) queueThumb(c.id);
 
   // dev handle: no build step, so this is how the console and the phase 10 perf gate reach the scene
   window.sketchy = {

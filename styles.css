@@ -81,13 +81,14 @@ html, body {
 }
 
 .canvas-item {
-  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  margin-bottom: 2px;
   border-radius: 4px;
   cursor: pointer;
   color: #b3b3b3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .canvas-item:hover {
@@ -98,6 +99,60 @@ html, body {
 .canvas-item.is-active {
   background: #2c2c2c;
   color: #fff;
+}
+
+/* Rendered at 120x80 and shown at half that, so the tile stays sharp on a 2x display. */
+.canvas-thumb {
+  width: 60px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid #333;
+  border-radius: 3px;
+  background: #000;
+}
+
+.canvas-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.canvas-rename {
+  flex: 1;
+  min-width: 0;
+  background: #101010;
+  color: #e6e6e6;
+  border: 1px solid #6ea8fe;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font: inherit;
+  outline: none;
+}
+
+.canvas-del {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #777;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.canvas-item:hover .canvas-del {
+  visibility: visible;
+}
+
+.canvas-del:hover {
+  background: #47262a;
+  color: #ff9c9c;
 }
 
 #main {

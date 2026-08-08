@@ -161,7 +161,9 @@ export function applyStyle(node, el) {
 
 // rough emits one <g> of <path> children; tag by role at creation so a color/opacity edit is a setAttribute, not a rebuild
 // fillPath is the one rough marks stroke="none"
-function buildNode(el) {
+// withHits is off for thumbnails: .hit is styled from styles.css, and an <img>-hosted SVG loads no
+// stylesheet, so an unstyled hit path would paint as a solid black default over the drawing
+export function buildNode(el, withHits = true) {
   const g = document.createElementNS(NS, "g");
   g.setAttribute("data-id", el.id);
 
@@ -173,6 +175,7 @@ function buildNode(el) {
     const isFill = p.getAttribute("stroke") === "none";
     p.setAttribute("data-role", isFill ? "fill" : "stroke");
     p.setAttribute("pointer-events", "none");
+    if (!withHits) continue;
     const hit = document.createElementNS(NS, "path");
     hit.setAttribute("d", p.getAttribute("d"));
     hit.setAttribute("class", isFill ? "hit-fill" : "hit");
@@ -252,11 +255,11 @@ function ensureChrome() {
   }
 }
 
-export function unionBBox(ids) {
+// takes a list, not ids, so thumbnails can fit a canvas that is not the one on screen
+export function unionBBoxOf(list) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   let n = 0;
-  for (const el of state.elements) {
-    if (ids && !ids.has(el.id)) continue;
+  for (const el of list) {
     const b = bboxOf(el);
     n++;
     if (b.x < minX) minX = b.x;
@@ -265,6 +268,11 @@ export function unionBBox(ids) {
     if (b.y + b.h > maxY) maxY = b.y + b.h;
   }
   return n ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+}
+
+// null ids means the whole scene, which is what zoom-to-fit wants
+export function unionBBox(ids) {
+  return unionBBoxOf(ids ? state.elements.filter((el) => ids.has(el.id)) : state.elements);
 }
 
 function gripPoints(b) {
