@@ -79,6 +79,7 @@ C:\dev\sketchy\
     app.js                  boot, state object, event wiring, shortcuts
     render.js               SVG diff render, rough cache, hit paths, selection chrome
     tools.js                pointer state machine, drag handlers, marquee
+    view.js                 pan, zoom, zoom-to-fit
     text.js                 <text>/<tspan> layout, <textarea> editor overlay
     history.js              undo/redo stack
     db.js                   IndexedDB wrapper
@@ -90,7 +91,9 @@ C:\dev\sketchy\
   README.md                 how to run, shortcuts
 ```
 
-Seven source files rather than one, because ES modules make the split free and `app.js` as a single file would run past 2000 lines. Each module owns one job and exports a handful of functions.
+Eight source files rather than one, because ES modules make the split free and `app.js` as a single file would run past 2000 lines. Each module owns one job and exports a handful of functions.
+
+`view.js` is separate from `render.js` because the viewport is state that three callers mutate (the wheel handler, the hand drag, and the two zoom shortcuts) while `render.js` only reads it to write the `viewBox`. It is also the one piece of state that is deliberately outside history.
 
 `index.html` layout: `#app` contains `#sidebar` (the canvas list with thumbnails, a New button, and per-item rename and delete) and `#main` (a top toolbar, the `<svg id="canvas">`, a `<textarea id="text-editor">` overlay hidden by default, and a right-side properties panel that appears only when something is selected).
 
@@ -180,9 +183,19 @@ Wheel handling follows the trackpad convention, because two-finger scroll fires 
 - Plain wheel: pan by `deltaX / scale` and `deltaY / scale`.
 - Shift held: pan horizontally by `deltaY`.
 
-Hand-mode: holding Space sets `tool = 'pan'`, switches the cursor to `grab`, and suppresses shape creation. A drag while panning adjusts `tx, ty` by `dScreen / scale`. Releasing Space restores the previous tool.
+The listener is registered `{ passive: false }`. Without it the `preventDefault` is ignored and ctrl+wheel zooms the whole page instead of the canvas.
 
-Zoom-to-fit (Shift+1) fits the union bbox of all elements with a 40px margin. Reset zoom (Ctrl+0) sets `scale = 1` and centers on the content. Pan and zoom are not undoable, only `elements` is. Undoing a pan would be jarring.
+Deltas are normalized before use. Firefox reports mouse wheels in `deltaMode: 1`, which is lines, not pixels, so a raw `deltaY` of 3 would pan three pixels there and a hundred in Chrome. Lines multiply by 16, pages by the viewport height. The zoom factor is `exp(-deltaY * 0.0015)`, which turns one 100px notch into about 14% and keeps trackpad pinch smooth because small deltas produce small factors.
+
+Shift plus wheel is messier than it looks. Chrome already swaps the axes when shift is held and reports the scroll on `deltaX`; Firefox leaves it on `deltaY`. Taking `deltaX || deltaY` covers both without sniffing the browser.
+
+Hand-mode: holding Space sets `tool = 'pan'`, switches the cursor to `grab`, and suppresses shape creation. The pan drag reads raw client deltas against the `tx, ty` cached at pointerdown rather than going through `screenToWorld`, because `tx` is moving underneath the handler and a world reading would chase its own tail. Releasing Space restores the previous tool, and so does a window `blur`, since losing focus mid-hold eats the keyup and would otherwise strand the canvas in hand mode.
+
+A `pointercancel` during a hand drag keeps the pan where it landed instead of rewinding it. Every other drag abort drops transient state that never reached the model, but the view has genuinely moved by then, and snapping it back is more disruptive than leaving it.
+
+Zoom-to-fit (Shift+1) fits the union bbox of all elements with a 40px margin, clamped to the same 0.2 to 8 range, so a lone small shape fills the viewport at 8x rather than at whatever 30x it would take. The shortcut is read off `e.code === 'Digit1'`, since `e.key` for shift+1 is `!` on a US layout and something else on most others. Reset zoom (Ctrl+0) sets `scale = 1` and centers on the content. Pan and zoom are not undoable, only `elements` is. Undoing a pan would be jarring.
+
+A zoom changes `scale`, and grip size, chrome padding, the hit margin and the preview stroke are all divided by it, so a zoom relays the selection chrome. A pan does not touch `scale`, so it writes the `viewBox` and nothing else.
 
 ## Selection and bulk edit
 
@@ -271,7 +284,9 @@ The sidebar and toolbar sit at `#181818` with a 1px `#333` border against the ca
 
 ## Shortcuts and toolbar
 
-The toolbar is a single row: Select, Rectangle, Ellipse, Diamond, Arrow, Text, then Black and Charcoal background buttons, then color and opacity controls (disabled when nothing is selected), then Undo and Redo buttons.
+The toolbar is a single row: Select, Rectangle, Ellipse, Diamond, Arrow, Text, then Black and Charcoal background buttons, then Undo and Redo, then a zoom readout that resets the zoom when clicked. Color and opacity live in the right-side properties panel, which appears only when something is selected.
+
+Hand-mode has no button. It is space-held only, so nothing in the toolbar shows as active while it is on, and the previous tool lights up again on release.
 
 Shortcuts, all gated to ignore when an `input`, `textarea`, or `contenteditable` is focused:
 
