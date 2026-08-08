@@ -1,10 +1,11 @@
-// pan and text hook into this dispatch in later phases
-import { state, commit, bump, elementById, selectionChanged } from "./app.js";
+// text hooks into this dispatch in a later phase
+import { state, commit, bump, elementById, selectionChanged, scheduleSave } from "./app.js";
 import {
   refreshRect, previewSet, previewClear, nodeFor, bboxOf,
   renderChrome, layoutChrome, setChromeTransform, unionBBox,
   marqueeShow, marqueeClear,
 } from "./render.js";
+import { setPan, panBy, zoomAt } from "./view.js";
 import { snapshot } from "./history.js";
 import { id } from "./db.js";
 
@@ -15,6 +16,9 @@ const DEFAULT_STROKE = "#e6e6e6";
 // A drag shorter than this in world units is a stray click, not a shape.
 const MIN_DRAG = 4;
 const MIN_SIZE = 1;
+// deltaMode 1 reports lines, not pixels. Firefox uses it for mouse wheels.
+const WHEEL_LINE = 16;
+const ZOOM_RATE = 0.0015;
 
 export function setTool(tool) {
   state.tool = tool;
@@ -141,6 +145,20 @@ function onDown(e) {
   refreshRect();
   const at = screenToWorld(e);
 
+  // space-held hand mode. Sits above the shape branch, so holding space suppresses shape creation.
+  if (state.tool === "pan") {
+    svg.setPointerCapture(e.pointerId);
+    state.drag = {
+      kind: "pan",
+      pointerId: e.pointerId,
+      startClient: { x: e.clientX, y: e.clientY },
+      startView: { tx: state.view.tx, ty: state.view.ty },
+    };
+    svg.classList.add("is-grabbing");
+    e.preventDefault();
+    return;
+  }
+
   if (SHAPE_TOOLS.has(state.tool)) {
     // without capture, a drag past the SVG edge drops the event stream and the shape freezes
     svg.setPointerCapture(e.pointerId);
@@ -216,6 +234,17 @@ function onDown(e) {
 function onMove(e) {
   const drag = state.drag;
   if (!drag || drag.pointerId !== e.pointerId) return;
+
+  // raw client delta, not screenToWorld: tx is moving underneath us, so a world reading would chase itself
+  if (drag.kind === "pan") {
+    const v = state.view;
+    setPan(
+      drag.startView.tx - (e.clientX - drag.startClient.x) / v.scale,
+      drag.startView.ty - (e.clientY - drag.startClient.y) / v.scale,
+    );
+    return;
+  }
+
   const at = screenToWorld(e);
 
   if (drag.kind === "create") {
@@ -256,6 +285,12 @@ function onUp(e) {
   if (!drag || drag.pointerId !== e.pointerId) return;
   release(drag.pointerId);
   state.drag = null;
+
+  if (drag.kind === "pan") {
+    svg.classList.remove("is-grabbing");
+    scheduleSave();
+    return;
+  }
 
   if (drag.kind === "create") {
     previewClear();
@@ -349,9 +384,37 @@ export function abortDrag() {
     setHidden(drag.ids, false);
   } else if (drag.kind === "marquee") {
     marqueeClear();
+  } else if (drag.kind === "pan") {
+    // the view already moved and it is not element state; snapping it back would be worse than keeping it
+    svg.classList.remove("is-grabbing");
+    scheduleSave();
   }
   previewClear();
   renderChrome();
+}
+
+function wheelDelta(e) {
+  const k = e.deltaMode === 1 ? WHEEL_LINE : e.deltaMode === 2 ? state.view.rect.height : 1;
+  return { dx: e.deltaX * k, dy: e.deltaY * k };
+}
+
+// trackpad two-finger scroll fires wheel, so a zoom-always mapping would zoom every time someone pans
+function onWheel(e) {
+  // ctrl+wheel is browser page zoom and trackpad pinch. Both belong to the canvas here.
+  e.preventDefault();
+  // a pan drag caches its start view, and a zoom underneath it would leave that cache stale
+  if (state.drag && state.drag.kind === "pan") return;
+  const { dx, dy } = wheelDelta(e);
+  if (e.ctrlKey || e.metaKey) {
+    zoomAt(e.clientX, e.clientY, Math.exp(-dy * ZOOM_RATE));
+    return;
+  }
+  // chrome already swaps the axes when shift is held, firefox does not, so take whichever axis reported
+  if (e.shiftKey) {
+    panBy(dx || dy, 0);
+    return;
+  }
+  panBy(dx, dy);
 }
 
 export function initTools() {
@@ -359,5 +422,7 @@ export function initTools() {
   svg.addEventListener("pointermove", onMove);
   svg.addEventListener("pointerup", onUp);
   svg.addEventListener("pointercancel", onCancel);
+  // passive: false, or preventDefault is ignored and ctrl+wheel zooms the page
+  svg.addEventListener("wheel", onWheel, { passive: false });
   setTool(state.tool);
 }

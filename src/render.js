@@ -227,6 +227,7 @@ export function resetRenderer() {
   scene.textContent = "";
   previewClear();
   marqueeClear();
+  setChromeTransform(null);
   layoutChrome(null);
 }
 
@@ -277,6 +278,17 @@ function gripPoints(b) {
   };
 }
 
+// a move drag rides the chrome along on the same transform the elements use.
+// tracked rather than read back off the node, so a zoom mid-drag relays the grips at the new
+// scale without dropping the translate and stranding the box behind the shapes.
+let chromeTransform = null;
+
+export function setChromeTransform(t) {
+  chromeTransform = t;
+  if (t) chromeLayer.setAttribute("transform", t);
+  else chromeLayer.removeAttribute("transform");
+}
+
 // pass null to hide; grips and padding are in screen px so they stay constant across zoom
 export function layoutChrome(b) {
   if (!b) {
@@ -285,7 +297,7 @@ export function layoutChrome(b) {
   }
   ensureChrome();
   chromeLayer.style.display = "";
-  chromeLayer.removeAttribute("transform");
+  setChromeTransform(chromeTransform);
 
   const s = state.view.scale;
   const pad = 4 / s;
@@ -309,12 +321,6 @@ export function layoutChrome(b) {
 
 export function renderChrome() {
   layoutChrome(state.selection.size ? unionBBox(state.selection) : null);
-}
-
-// a move drag rides the chrome along on the same transform the elements use
-export function setChromeTransform(t) {
-  if (t) chromeLayer.setAttribute("transform", t);
-  else chromeLayer.removeAttribute("transform");
 }
 
 let marqueeNode = null;

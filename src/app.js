@@ -10,9 +10,10 @@ import {
 } from "./db.js";
 import {
   initRenderer, renderElements, resetRenderer, renderChrome,
-  applyStyle, nodeFor, refreshRect,
+  applyStyle, nodeFor, refreshRect, updateViewBox,
 } from "./render.js";
 import { initTools, setTool, abortDrag } from "./tools.js";
+import { zoomToFit, resetZoom, syncZoomLabel } from "./view.js";
 import { snapshot, pushSnapshot, undo, redo, canUndo, canRedo, resetHistory } from "./history.js";
 
 // history lives in history.js so a snapshot can't capture the stack
@@ -42,6 +43,7 @@ const noFillInput = document.getElementById("prop-nofill");
 const opacityInput = document.getElementById("prop-opacity");
 const opacityVal = document.getElementById("prop-opacity-val");
 const panelCount = document.getElementById("panel-count");
+const zoomBtn = document.getElementById("zoom-level");
 
 function applyBg(tone) {
   state.bg = tone;
@@ -60,8 +62,9 @@ export function setBg(tone) {
 bgBlack.addEventListener("click", () => setBg("black"));
 bgCharcoal.addEventListener("click", () => setBg("charcoal"));
 newBtn.addEventListener("click", newCanvas);
+zoomBtn.addEventListener("click", resetZoom);
 
-// pan has no button; space-held only (phase 5)
+// pan has no toolbar button. It is space-held, and the previous tool comes back on release.
 
 const TOOLS = [
   ["select", "Select"],
@@ -231,10 +234,36 @@ function isTyping() {
   return a.tagName === "INPUT" && TEXT_INPUTS.has((a.type || "text").toLowerCase());
 }
 
+// the tool space interrupted, so release can put it back
+let heldTool = null;
+
+function endHandMode() {
+  if (!heldTool) return;
+  setTool(heldTool);
+  heldTool = null;
+}
+
 window.addEventListener("keydown", (e) => {
   if (isTyping()) return;
+
+  // e.repeat fires while the key is held and would overwrite heldTool with 'pan'
+  if (e.code === "Space") {
+    e.preventDefault(); // space scrolls the page and clicks a focused button
+    if (e.repeat || state.drag || state.tool === "pan") return;
+    heldTool = state.tool;
+    setTool("pan");
+    return;
+  }
+
   const mod = e.ctrlKey || e.metaKey;
-  if (!mod) return;
+  if (!mod) {
+    // e.code, not e.key: shift+1 is '!' on a US layout and something else everywhere it is not
+    if (e.shiftKey && e.code === "Digit1") {
+      e.preventDefault();
+      zoomToFit();
+    }
+    return;
+  }
   const k = e.key.toLowerCase();
 
   if (k === "z" && !e.shiftKey) {
@@ -247,7 +276,14 @@ window.addEventListener("keydown", (e) => {
     // third redo binding; one miss reloads the page, preventable in current Chrome/Firefox
     e.preventDefault();
     doRedo();
+  } else if (k === "0") {
+    e.preventDefault();
+    resetZoom();
   }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") endHandMode();
 });
 
 // microtask + 250ms debounce, IDB write in requestIdleCallback to stay off the pointer path
@@ -299,7 +335,11 @@ export function flushSave({ immediate = false } = {}) {
   else requestIdleCallback(write, { timeout: 1500 });
 }
 
-window.addEventListener("blur", () => flushSave({ immediate: true }));
+// a focus loss eats the keyup, which would otherwise leave the canvas stuck in hand mode
+window.addEventListener("blur", () => {
+  endHandMode();
+  flushSave({ immediate: true });
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") flushSave({ immediate: true });
 });
@@ -322,6 +362,9 @@ export async function switchCanvas(cid) {
   state.bg = doc && doc.bg ? doc.bg : "black";
   state.selection.clear();
   applyBg(state.bg);
+  // tx/ty/scale came off the record, so the viewBox has to catch up before the first paint
+  updateViewBox();
+  syncZoomLabel();
   resetHistory();
   syncHistoryButtons();
   resetRenderer();
@@ -409,6 +452,7 @@ async function boot() {
   buildToolbar();
   initRenderer();
   initTools();
+  syncZoomLabel();
   renderElements();
   selectionChanged();
 
@@ -424,6 +468,8 @@ async function boot() {
     undo: doUndo,
     redo: doRedo,
     selectionChanged,
+    zoomToFit,
+    resetZoom,
     clearHistory: () => {
       resetHistory();
       syncHistoryButtons();

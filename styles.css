@@ -147,6 +147,12 @@ html, body {
   cursor: default;
 }
 
+.zoom-btn {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  color: #b3b3b3;
+}
+
 .bg-btn.is-active,
 .tool-btn.is-active {
   background: #3a3a3a;
@@ -192,6 +198,22 @@ html, body {
 #canvas[data-tool="arrow"],
 #canvas[data-tool="text"] {
   cursor: crosshair;
+}
+
+#canvas[data-tool="pan"] {
+  cursor: grab;
+}
+
+/* Wins on specificity, so the fist only shows while the button is down. */
+#canvas[data-tool="pan"].is-grabbing {
+  cursor: grabbing;
+}
+
+/* Grips would still show their resize cursor under the hand, which reads as a
+   resize that hand mode will not do. */
+#canvas[data-tool="pan"] .grip {
+  cursor: inherit;
+  pointer-events: none;
 }
 
 /* Companion hit paths. Same d as the visible rough path, fat and invisible,
