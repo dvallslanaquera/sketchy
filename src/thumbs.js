@@ -9,7 +9,9 @@ const W = 120;
 const H = 80;
 const PAD = 6; // world units at 1:1, so a shape's stroke does not touch the edge
 
-const BG = { black: "#000000", charcoal: "#232323" };
+// export.js shares BG, inlineBlobs and serializeSvg. An exported file faces the same constraints
+// as a tile: no stylesheet, no blob: URLs, and the PNG path goes through an <img> as well.
+export const BG = { black: "#000000", charcoal: "#232323" };
 
 // canvasId -> dataUrl, so the sidebar can paint without a round trip per repaint
 const cache = new Map();
@@ -66,7 +68,7 @@ function readAsDataUrl(blob) {
 
 // blob: URLs do not resolve inside an <img>-hosted SVG, which fetches nothing and runs no script.
 // Image nodes carry data-blob-id for exactly this swap.
-async function inlineBlobs(svg, elements) {
+export async function inlineBlobs(svg, elements) {
   const ids = new Set();
   for (const el of elements) if (el.type === "image" && el.blobId) ids.add(el.blobId);
   if (!ids.size) return;
@@ -84,21 +86,25 @@ async function inlineBlobs(svg, elements) {
   }
 }
 
-// encodeURIComponent rather than base64: the payload is text and may hold non-ascii, and btoa
-// throws on anything above U+00FF
-function toDataUrl(svg) {
+export function serializeSvg(svg) {
   let xml = new XMLSerializer().serializeToString(svg);
   // The serializer emits xmlns itself for a namespaced root, and setting the attribute by hand
   // risks a duplicate declaration, which is invalid XML and renders as nothing in an <img>.
   // Patch it only if it is actually missing.
   if (!xml.includes("xmlns=")) xml = xml.replace("<svg", `<svg xmlns="${NS}"`);
-  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+  return xml;
+}
+
+// encodeURIComponent rather than base64: the payload is text and may hold non-ascii, and btoa
+// throws on anything above U+00FF
+export function svgDataUrl(svg) {
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(serializeSvg(svg));
 }
 
 export async function renderThumb(elements, bg) {
   const svg = buildSvg(elements, bg);
   await inlineBlobs(svg, elements);
-  return toDataUrl(svg);
+  return svgDataUrl(svg);
 }
 
 let onReady = null;

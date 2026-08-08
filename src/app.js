@@ -16,6 +16,11 @@ import { initTools, setTool, abortDrag } from "./tools.js";
 import { zoomToFit, resetZoom, syncZoomLabel } from "./view.js";
 import { thumbUrl, queueThumb, dropThumb, primeThumbs, setThumbListener } from "./thumbs.js";
 import { snapshot, pushSnapshot, undo, redo, canUndo, canRedo, resetHistory } from "./history.js";
+import {
+  copySelection, cutSelection, onPaste, duplicateSelection,
+  deleteSelection, selectAll, bringToFront, sendToBack,
+} from "./edit.js";
+import { exportCanvas } from "./export.js";
 
 // history lives in history.js so a snapshot can't capture the stack
 export const state = {
@@ -27,6 +32,8 @@ export const state = {
   bg: "black",
   tool: "select",
   drag: null,
+  // survives a canvas switch on purpose, so copy on one drawing and paste on another works
+  clipboard: [],
 };
 
 const canvasEl = document.getElementById("canvas");
@@ -244,6 +251,26 @@ function endHandMode() {
   heldTool = null;
 }
 
+// digits pick from the toolbar row, so 1 is Select and 6 is Text
+function pickTool(index) {
+  const t = TOOLS[index];
+  if (!t) return;
+  // space is down, and its release would restore the old tool and swallow this choice
+  if (heldTool) heldTool = t[0];
+  else setTool(t[0]);
+}
+
+// a text edit cancels here too once phase 6 lands
+function cancelCurrent() {
+  if (state.drag) {
+    abortDrag();
+    return;
+  }
+  if (!state.selection.size) return;
+  state.selection.clear();
+  selectionChanged();
+}
+
 window.addEventListener("keydown", (e) => {
   if (isTyping()) return;
 
@@ -258,16 +285,41 @@ window.addEventListener("keydown", (e) => {
 
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) {
+    if (e.key === "Escape") {
+      cancelCurrent();
+      return;
+    }
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault(); // backspace still means "go back" in a few configurations
+      deleteSelection();
+      return;
+    }
     // e.code, not e.key: shift+1 is '!' on a US layout and something else everywhere it is not
     if (e.shiftKey && e.code === "Digit1") {
       e.preventDefault();
       zoomToFit();
+      return;
+    }
+    if (!e.shiftKey && !e.altKey && /^Digit[1-6]$/.test(e.code)) {
+      e.preventDefault();
+      pickTool(Number(e.code.slice(5)) - 1);
     }
     return;
   }
-  const k = e.key.toLowerCase();
 
-  if (k === "z" && !e.shiftKey) {
+  // e.key for ctrl+shift+] is '}' on a US layout and absent on plenty of others
+  if (e.shiftKey && (e.code === "BracketRight" || e.code === "BracketLeft")) {
+    e.preventDefault();
+    if (e.code === "BracketRight") bringToFront();
+    else sendToBack();
+    return;
+  }
+
+  const k = e.key.toLowerCase();
+  // the four edit commands want ctrl on its own, so Ctrl+Shift+C still opens the inspector
+  const plain = !e.shiftKey;
+
+  if (k === "z" && plain) {
     e.preventDefault();
     doUndo();
   } else if ((k === "z" && e.shiftKey) || k === "y") {
@@ -280,7 +332,27 @@ window.addEventListener("keydown", (e) => {
   } else if (k === "0") {
     e.preventDefault();
     resetZoom();
+  } else if (k === "e" && e.shiftKey) {
+    e.preventDefault();
+    exportCanvas().catch((err) => console.error("sketchy: export failed", err));
+  } else if (k === "c" && plain) {
+    copySelection(); // no preventDefault: nothing is selectable on the page to copy anyway
+  } else if (k === "x" && plain) {
+    cutSelection();
+  } else if (k === "a" && plain) {
+    e.preventDefault(); // ctrl+A would select the whole document
+    selectAll();
+  } else if (k === "d" && plain) {
+    e.preventDefault(); // ctrl+D is bookmark-this-page
+    duplicateSelection();
   }
+  // Ctrl+V has no binding here. The paste event carries the clipboard synchronously and
+  // navigator.clipboard.read() would prompt, so the listener below owns it.
+});
+
+window.addEventListener("paste", (e) => {
+  if (isTyping()) return;
+  onPaste(e);
 });
 
 window.addEventListener("keyup", (e) => {
